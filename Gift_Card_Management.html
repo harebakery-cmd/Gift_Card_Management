@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>HAREHARE 상품권 통합 관리 시스템</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<!-- Firebase SDK 추가 (실시간 동기화용) -->
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js"></script>
 <style>
   :root{
     --cream:#FBF7F0; --cream-deep:#F3EAD9; --beige:#E9DCC5;
@@ -83,13 +86,13 @@
   .back-link:hover{background:var(--cream-deep);}
 
   /* ===== Cards / Status ===== */
-  .status-grid{ display:grid; grid-template-columns:repeat(6,1fr); gap:12px; margin-bottom:30px; }
-  @media(max-width:1100px){.status-grid{grid-template-columns:repeat(3,1fr);}}
-  @media(max-width:600px){.status-grid{grid-template-columns:repeat(2,1fr);}}
+  .status-grid{ display:grid; grid-template-columns:repeat(7,1fr); gap:12px; margin-bottom:30px; }
+  @media(max-width:1200px){.status-grid{grid-template-columns:repeat(4,1fr);}}
+  @media(max-width:700px){.status-grid{grid-template-columns:repeat(2,1fr);}}
   .status-card{ background:var(--white); border-radius:18px; padding:18px 14px; box-shadow:var(--shadow-sm); border:1px solid var(--line); position:relative; overflow:hidden; }
   .status-card::before{ content:""; position:absolute; top:0; left:0; width:5px; height:100%; background:var(--gold); }
   .status-card .label{font-size:12px; color:var(--brown-soft); font-weight:600;}
-  .status-card .value{font-size:22px; font-weight:800; color:var(--brown-dark); margin-top:6px;}
+  .status-card .value{font-size:20px; font-weight:800; color:var(--brown-dark); margin-top:6px;}
   .status-card .value span{font-size:12px; font-weight:600; color:var(--brown-soft); margin-left:2px;}
   .status-card.gold::before{background:var(--gold);}
   .status-card.warn::before{background:var(--danger);}
@@ -145,7 +148,7 @@
 <nav id="topnav">
   <div class="brand-left" onclick="go('home')" title="홈으로 이동">🥐 HAREHARE</div>
   <div class="brand-center"></div>
-  <div id="syncTag"><span class="led"></span> 연결 확인 중...</div>
+  <div id="syncTag"><span class="led"></span> 실시간 동기화 연결 중...</div>
 </nav>
 
 <main>
@@ -173,7 +176,7 @@
 
     <div class="panel">
       <h3>📋 상품권 입출 내역</h3>
-      <div class="desc">관리부 수령 / 현재 매장 보유 / 판매 / 고객 사용 / 재사용 / 폐기 내역을 기록합니다.</div>
+      <div class="desc">관리부 수령 / 현재 매장 보유 / 판매 / 고객 사용 / 재사용 / 회수용 / 기타 내역을 기록합니다.</div>
       <div class="table-wrap">
         <table>
           <thead><tr><th style="width:130px">날짜</th><th style="width:160px">구분</th><th style="width:100px">수량</th><th>비고</th><th style="width:90px">관리</th></tr></thead>
@@ -315,62 +318,27 @@
 <div class="toast" id="toast"></div>
 
 <script>
-/* =========================================================================
-   🔧 설정: Firebase Realtime Database 주소를 아래에 입력하세요.
-   - 생산일지 앱(제품 생산 및 출고 일지)과 같은 Firebase 프로젝트를 쓰고 있다면
-     그 앱 코드에 있는 FB_URL 값을 그대로 복사해서 붙여넣으면 됩니다.
-     (데이터는 "harehare_giftcard"라는 별도 경로에 저장되어 생산일지 데이터와 섞이지 않습니다.)
-   - 새로 만들 경우: Firebase 콘솔(console.firebase.google.com) → 프로젝트 생성 →
-     빌드 → Realtime Database → 데이터베이스 만들기(테스트 모드) 후 나오는
-     "https://프로젝트이름-default-rtdb.리전.firebasedatabase.app" 형태의 주소를 넣으세요.
-   ========================================================================= */
 const FB_URL = "https://gift-card-management-d3178-default-rtdb.asia-southeast1.firebasedatabase.app";
 const FB_ROOT = "harehare_giftcard";
 
-const DB = {
-  async get(key, fallback){
-    try{
-      const res = await fetch(`${FB_URL}/${FB_ROOT}/${key}.json`);
-      if(!res.ok) throw new Error('status ' + res.status);
-      const data = await res.json();
-      setSyncStatus(true);
-      return (data === null || data === undefined) ? fallback : data;
-    }catch(e){
-      console.error('Firebase 불러오기 실패:', e);
-      setSyncStatus(false);
-      return fallback;
-    }
-  },
-  async set(key, value){
-    try{
-      const res = await fetch(`${FB_URL}/${FB_ROOT}/${key}.json`, {
-        method:'PUT',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify(value)
-      });
-      if(!res.ok) throw new Error('status ' + res.status);
-      setSyncStatus(true);
-      return true;
-    }catch(e){
-      console.error('Firebase 저장 실패:', e);
-      setSyncStatus(false);
-      return false;
-    }
-  }
-};
+// Firebase SDK 초기화
+const firebaseConfig = { databaseURL: FB_URL };
+if (!firebase.apps.length) {
+  firebase.initializeApp(firebaseConfig);
+}
+const db = firebase.database();
 
 function setSyncStatus(ok){
   const tag = document.getElementById('syncTag');
   if(!tag) return;
   tag.innerHTML = ok
-    ? '<span class="led"></span> 실시간 동기화'
-    : '<span class="led" style="background:var(--danger);"></span> 동기화 오류 (인터넷/주소 확인)';
+    ? '<span class="led"></span> 실시간 동기화 중'
+    : '<span class="led" style="background:var(--danger);"></span> 동기화 오류';
 }
 
 const STORES = ["도안점","둔산점","갤러리아점","유성점","건양대점"];
-// 요청 반영: "현재 매장 보유" 항목 추가
-const RECORD_TYPES = ["관리부 수령", "현재 매장 보유", "상품권 판매", "고객 사용", "재사용 상품권", "회수용 상품권"];
-const REPORT_TYPES = ["관리부 수령", "현재 매장 보유", "상품권 판매", "고객 사용", "재사용 상품권", "회수용 상품권"];
+const RECORD_TYPES = ["관리부 수령", "현재 매장 보유", "상품권 판매", "고객 사용", "재사용 상품권", "회수용 상품권", "기타"];
+const REPORT_TYPES = ["관리부 수령", "현재 매장 보유", "상품권 판매", "고객 사용", "재사용 상품권", "회수용 상품권", "기타"];
 
 let STATE = {
   stores: {},
@@ -379,8 +347,9 @@ let STATE = {
 };
 
 let adminUnlockedThisSession = false;
+let currentStoreListener = null;
+let currentAdminListener = null;
 
-function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
 function todayStr(){ return new Date().toISOString().slice(0,10); }
 function fmtNum(n){ return (n||0).toLocaleString('ko-KR'); }
 
@@ -418,35 +387,60 @@ function showToast(msg){
   showToast._tm = setTimeout(()=>t.classList.remove('show'), 1800);
 }
 
-// Firebase Realtime Database는 빈 배열([])을 저장하면 해당 경로를 아예 지워버립니다.
-// 그래서 불러온 데이터에 필드가 통째로 없을 수 있어 항상 기본값으로 보정해줍니다.
-function normalizeStoreData(raw){
-  return { records: (raw && raw.records) || [], pos: (raw && raw.pos) || [] };
-}
-function normalizeAdminData(raw){
-  return {
-    supply: (raw && raw.supply) || [],
-    outbound: (raw && raw.outbound) || [],
-    returns: (raw && raw.returns) || []
-  };
+// 객체 데이터를 배열(id 포함) 형태로 변환 변환
+function parseSnapshotData(snapshotVal){
+  if(!snapshotVal) return [];
+  return Object.entries(snapshotVal).map(([id, val]) => ({ id, ...val }));
 }
 
-async function loadAll(){
-  for(const s of STORES){
-    const raw = await DB.get('store_'+s, null);
-    STATE.stores[s] = normalizeStoreData(raw);
+// 실시간 감지 리스너 설정 (매장별)
+function watchStore(storeName, callback){
+  if(currentStoreListener){
+    db.ref(`${FB_ROOT}/store_${currentStoreName}`).off('value', currentStoreListener);
   }
-  const rawAdmin = await DB.get('admin', null);
-  STATE.admin = normalizeAdminData(rawAdmin);
+  currentStoreName = storeName;
+  const ref = db.ref(`${FB_ROOT}/store_${storeName}`);
+  currentStoreListener = ref.on('value', (snapshot) => {
+    const data = snapshot.val() || {};
+    STATE.stores[storeName] = {
+      records: parseSnapshotData(data.records),
+      pos: parseSnapshotData(data.pos)
+    };
+    setSyncStatus(true);
+    if(callback) callback();
+  }, (error) => {
+    console.error(error);
+    setSyncStatus(false);
+  });
 }
 
-async function saveStore(name){ await DB.set('store_'+name, STATE.stores[name]); }
-async function saveAdmin(){ await DB.set('admin', STATE.admin); }
+// 실시간 감지 리스너 설정 (관리팀)
+function watchAdmin(callback){
+  if(currentAdminListener){
+    db.ref(`${FB_ROOT}/admin`).off('value', currentAdminListener);
+  }
+  const ref = db.ref(`${FB_ROOT}/admin`);
+  currentAdminListener = ref.on('value', (snapshot) => {
+    const data = snapshot.val() || {};
+    STATE.admin = {
+      supply: parseSnapshotData(data.supply),
+      outbound: parseSnapshotData(data.outbound),
+      returns: parseSnapshotData(data.returns)
+    };
+    setSyncStatus(true);
+    if(callback) callback();
+  }, (error) => {
+    console.error(error);
+    setSyncStatus(false);
+  });
+}
 
-/* ===== 관리팀 비밀번호 ===== */
 async function getAdminPassword(){
-  const settings = await DB.get('settings', { adminPassword: 'hare1234' });
-  return settings.adminPassword || 'hare1234';
+  return new Promise((resolve) => {
+    db.ref(`${FB_ROOT}/settings/adminPassword`).once('value', (snapshot) => {
+      resolve(snapshot.val() || 'hare1234');
+    }, () => resolve('hare1234'));
+  });
 }
 
 async function ensureAdminUnlocked(){
@@ -517,19 +511,18 @@ async function changeAdminPassword(){
   const confirmNext = prompt('새 비밀번호를 한 번 더 입력하세요');
   if(confirmNext !== next){ showToast('비밀번호가 서로 일치하지 않습니다'); return; }
 
-  const settings = await DB.get('settings', { adminPassword: 'hare1234' });
-  settings.adminPassword = next;
-  const ok = await DB.set('settings', settings);
-  showToast(ok ? '비밀번호가 변경되었습니다' : '저장에 실패했습니다. 연결을 확인해주세요');
+  db.ref(`${FB_ROOT}/settings/adminPassword`).set(next, (error) => {
+    showToast(!error ? '비밀번호가 변경되었습니다' : '저장에 실패했습니다.');
+  });
 }
 
-/* ===== 페이지 이동 ===== */
+let currentStoreName = null;
+
 async function go(page, storeName){
   if(page === 'admin'){
     const ok = await ensureAdminUnlocked();
     if(!ok) return;
   } else {
-    // 관리팀 페이지를 벗어나면 다시 잠금 상태로 돌아갑니다 (재입장 시 비밀번호 재입력 필요)
     adminUnlockedThisSession = false;
     sessionStorage.removeItem('harehare_admin_unlocked');
   }
@@ -537,18 +530,18 @@ async function go(page, storeName){
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
 
   if(page === 'home'){
+    if(currentStoreListener) { db.ref(`${FB_ROOT}/store_${currentStoreName}`).off('value', currentStoreListener); currentStoreListener = null; }
+    if(currentAdminListener) { db.ref(`${FB_ROOT}/admin`).off('value', currentAdminListener); currentAdminListener = null; }
     document.getElementById('page-home').classList.add('active');
   } else if(page === 'store'){
+    if(currentAdminListener) { db.ref(`${FB_ROOT}/admin`).off('value', currentAdminListener); currentAdminListener = null; }
     STATE.currentStore = storeName;
     document.getElementById('page-store').classList.add('active');
-    showToast('불러오는 중...');
-    STATE.stores[storeName] = normalizeStoreData(await DB.get('store_'+storeName, null));
-    renderStorePage(storeName);
+    watchStore(storeName, ()=>renderStorePage(storeName));
   } else if(page === 'admin'){
+    if(currentStoreListener) { db.ref(`${FB_ROOT}/store_${currentStoreName}`).off('value', currentStoreListener); currentStoreListener = null; }
     document.getElementById('page-admin').classList.add('active');
-    showToast('불러오는 중...');
-    await loadAll();
-    renderAdminPage();
+    watchAdmin(()=>renderAdminPage());
   }
   window.scrollTo({top:0, behavior:'smooth'});
 }
@@ -571,7 +564,8 @@ function renderHome(){
 }
 
 function storeTotals(name){
-  const records = STATE.stores[name].records;
+  const storeData = STATE.stores[name] || { records: [], pos: [] };
+  const records = storeData.records;
   const totals = {};
   RECORD_TYPES.forEach(t=>totals[t]=0);
   records.forEach(r=>{ totals[r.type] = (totals[r.type]||0) + Number(r.qty||0); });
@@ -595,8 +589,8 @@ function renderStorePage(name){
 
   const sel = document.getElementById('srType');
   sel.innerHTML = RECORD_TYPES.map(t=>`<option value="${t}">${t}</option>`).join('');
-  document.getElementById('srDate').value = todayStr();
-  document.getElementById('posDate').value = todayStr();
+  if(!document.getElementById('srDate').value) document.getElementById('srDate').value = todayStr();
+  if(!document.getElementById('posDate').value) document.getElementById('posDate').value = todayStr();
 
   renderStoreRecords(name);
   renderPosList(name);
@@ -604,7 +598,8 @@ function renderStorePage(name){
 
 function renderStoreRecords(name){
   const body = document.getElementById('storeRecordsBody');
-  const records = STATE.stores[name].records.slice().sort((a,b)=> b.date.localeCompare(a.date));
+  const storeData = STATE.stores[name] || { records: [], pos: [] };
+  const records = storeData.records.slice().sort((a,b)=> (b.date||'').localeCompare(a.date||''));
   if(records.length === 0){
     body.innerHTML = `<tr class="empty-row"><td colspan="5">등록된 내역이 없습니다.</td></tr>`;
     return;
@@ -629,17 +624,22 @@ async function addStoreRecord(){
   const note = document.getElementById('srNote').value.trim();
   if(!qty){ showToast('수량을 입력해주세요'); return; }
 
-  STATE.stores[STATE.currentStore].records.push({id:uid(), date, type, qty, note});
-  await saveStore(STATE.currentStore);
-  document.getElementById('srQty').value = '';
-  document.getElementById('srNote').value = '';
-  renderStorePage(STATE.currentStore);
-  showToast('저장되었습니다');
+  db.ref(`${FB_ROOT}/store_${STATE.currentStore}/records`).push({date, type, qty, note}, (error)=>{
+    if(!error){
+      document.getElementById('srQty').value = '';
+      document.getElementById('srNote').value = '';
+      showToast('저장되었습니다');
+    } else {
+      showToast('저장 실패');
+    }
+  });
 }
 
 function editStoreRecord(store, id){
   const row = document.querySelector(`#storeRecordsBody tr[data-id="${id}"]`);
-  const rec = STATE.stores[store].records.find(r=>r.id===id);
+  const storeData = STATE.stores[store] || { records: [] };
+  const rec = storeData.records.find(r=>r.id===id);
+  if(!rec) return;
   row.innerHTML = `
     <td><input type="date" value="${rec.date}" id="e-date-${id}"></td>
     <td><select id="e-type-${id}">${RECORD_TYPES.map(t=>`<option value="${t}" ${t===rec.type?'selected':''}>${t}</option>`).join('')}</select></td>
@@ -652,27 +652,27 @@ function editStoreRecord(store, id){
 }
 
 async function saveStoreRecord(store, id){
-  const rec = STATE.stores[store].records.find(r=>r.id===id);
-  rec.date = document.getElementById(`e-date-${id}`).value;
-  rec.type = document.getElementById(`e-type-${id}`).value;
-  rec.qty = Number(document.getElementById(`e-qty-${id}`).value || 0);
-  rec.note = document.getElementById(`e-note-${id}`).value.trim();
-  await saveStore(store);
-  renderStorePage(store);
-  showToast('수정되었습니다');
+  const date = document.getElementById(`e-date-${id}`).value;
+  const type = document.getElementById(`e-type-${id}`).value;
+  const qty = Number(document.getElementById(`e-qty-${id}`).value || 0);
+  const note = document.getElementById(`e-note-${id}`).value.trim();
+
+  db.ref(`${FB_ROOT}/store_${store}/records/${id}`).update({date, type, qty, note}, (error)=>{
+    showToast(!error ? '수정되었습니다' : '수정 실패');
+  });
 }
 
 async function deleteStoreRecord(store, id){
   if(!(await customConfirm('이 내역을 삭제하시겠습니까?'))) return;
-  STATE.stores[store].records = STATE.stores[store].records.filter(r=>r.id!==id);
-  await saveStore(store);
-  renderStorePage(store);
-  showToast('삭제되었습니다');
+  db.ref(`${FB_ROOT}/store_${store}/records/${id}`).remove((error)=>{
+    showToast(!error ? '삭제되었습니다' : '삭제 실패');
+  });
 }
 
 function renderPosList(name){
   const body = document.getElementById('storePosBody');
-  const list = STATE.stores[name].pos.slice().sort((a,b)=> b.date.localeCompare(a.date));
+  const storeData = STATE.stores[name] || { records: [], pos: [] };
+  const list = storeData.pos.slice().sort((a,b)=> (b.date||'').localeCompare(a.date||''));
   if(list.length === 0){
     body.innerHTML = `<tr class="empty-row"><td colspan="4">등록된 내역이 없습니다.</td></tr>`;
     return;
@@ -695,17 +695,22 @@ async function addPosRow(){
   const note = document.getElementById('posNote').value.trim() || '환불 후 POS 미반영';
   if(!amount){ showToast('금액을 입력해주세요'); return; }
 
-  STATE.stores[STATE.currentStore].pos.push({id:uid(), date, amount, note});
-  await saveStore(STATE.currentStore);
-  document.getElementById('posAmount').value = '';
-  document.getElementById('posNote').value = '';
-  renderPosList(STATE.currentStore);
-  showToast('저장되었습니다');
+  db.ref(`${FB_ROOT}/store_${STATE.currentStore}/pos`).push({date, amount, note}, (error)=>{
+    if(!error){
+      document.getElementById('posAmount').value = '';
+      document.getElementById('posNote').value = '';
+      showToast('저장되었습니다');
+    } else {
+      showToast('저장 실패');
+    }
+  });
 }
 
 function editPosRow(store, id){
   const row = document.querySelector(`#storePosBody tr[data-id="${id}"]`);
-  const p = STATE.stores[store].pos.find(x=>x.id===id);
+  const storeData = STATE.stores[store] || { pos: [] };
+  const p = storeData.pos.find(x=>x.id===id);
+  if(!p) return;
   row.innerHTML = `
     <td><input type="date" value="${p.date}" id="e-pdate-${id}"></td>
     <td><input type="number" value="${p.amount}" id="e-pamt-${id}"></td>
@@ -717,21 +722,20 @@ function editPosRow(store, id){
 }
 
 async function savePosRow(store, id){
-  const p = STATE.stores[store].pos.find(x=>x.id===id);
-  p.date = document.getElementById(`e-pdate-${id}`).value;
-  p.amount = Number(document.getElementById(`e-pamt-${id}`).value || 0);
-  p.note = document.getElementById(`e-pnote-${id}`).value.trim();
-  await saveStore(store);
-  renderPosList(store);
-  showToast('수정되었습니다');
+  const date = document.getElementById(`e-pdate-${id}`).value;
+  const amount = Number(document.getElementById(`e-pamt-${id}`).value || 0);
+  const note = document.getElementById(`e-pnote-${id}`).value.trim();
+
+  db.ref(`${FB_ROOT}/store_${store}/pos/${id}`).update({date, amount, note}, (error)=>{
+    showToast(!error ? '수정되었습니다' : '수정 실패');
+  });
 }
 
 async function deletePosRow(store, id){
   if(!(await customConfirm('이 내역을 삭제하시겠습니까?'))) return;
-  STATE.stores[store].pos = STATE.stores[store].pos.filter(x=>x.id!==id);
-  await saveStore(store);
-  renderPosList(store);
-  showToast('삭제되었습니다');
+  db.ref(`${FB_ROOT}/store_${store}/pos/${id}`).remove((error)=>{
+    showToast(!error ? '삭제되었습니다' : '삭제 실패');
+  });
 }
 
 function adminTotals(){
@@ -754,9 +758,9 @@ function renderAdminPage(){
     <div class="status-card warn"><div class="label">폐기 처리 상품권</div><div class="value">${fmtNum(t.discardTotal)}<span>장</span></div></div>
   `;
 
-  document.getElementById('supDate').value = todayStr();
-  document.getElementById('outDate').value = todayStr();
-  document.getElementById('retDate').value = todayStr();
+  if(!document.getElementById('supDate').value) document.getElementById('supDate').value = todayStr();
+  if(!document.getElementById('outDate').value) document.getElementById('outDate').value = todayStr();
+  if(!document.getElementById('retDate').value) document.getElementById('retDate').value = todayStr();
 
   const outSel = document.getElementById('outStore');
   outSel.innerHTML = STORES.map(s=>`<option value="${s}">${s}</option>`).join('');
@@ -776,7 +780,7 @@ function renderAdminPage(){
 
 function renderSupply(){
   const body = document.getElementById('supplyBody');
-  const list = STATE.admin.supply.slice().sort((a,b)=>b.date.localeCompare(a.date));
+  const list = STATE.admin.supply.slice().sort((a,b)=>(b.date||'').localeCompare(a.date||''));
   if(list.length===0){ body.innerHTML = `<tr class="empty-row"><td colspan="5">등록된 내역이 없습니다.</td></tr>`; return; }
   body.innerHTML = list.map(r=>`
     <tr data-id="${r.id}">
@@ -795,18 +799,22 @@ async function addSupply(){
   const note = document.getElementById('supNote').value.trim();
   if(!qty){ showToast('수량을 입력해주세요'); return; }
 
-  STATE.admin.supply.push({id:uid(), date, vendor, qty, note});
-  await saveAdmin();
-  document.getElementById('supVendor').value='';
-  document.getElementById('supQty').value='';
-  document.getElementById('supNote').value='';
-  renderAdminPage();
-  showToast('저장되었습니다');
+  db.ref(`${FB_ROOT}/admin/supply`).push({date, vendor, qty, note}, (error)=>{
+    if(!error){
+      document.getElementById('supVendor').value='';
+      document.getElementById('supQty').value='';
+      document.getElementById('supNote').value='';
+      showToast('저장되었습니다');
+    } else {
+      showToast('저장 실패');
+    }
+  });
 }
 
 function editSupply(id){
   const row = document.querySelector(`#supplyBody tr[data-id="${id}"]`);
   const r = STATE.admin.supply.find(x=>x.id===id);
+  if(!r) return;
   row.innerHTML = `
     <td><input type="date" value="${r.date}" id="e-sdate-${id}"></td>
     <td><input type="text" value="${r.vendor}" id="e-svendor-${id}"></td>
@@ -819,27 +827,26 @@ function editSupply(id){
 }
 
 async function saveSupply(id){
-  const r = STATE.admin.supply.find(x=>x.id===id);
-  r.date = document.getElementById(`e-sdate-${id}`).value;
-  r.vendor = document.getElementById(`e-svendor-${id}`).value.trim();
-  r.qty = Number(document.getElementById(`e-sqty-${id}`).value||0);
-  r.note = document.getElementById(`e-snote-${id}`).value.trim();
-  await saveAdmin();
-  renderAdminPage();
-  showToast('수정되었습니다');
+  const date = document.getElementById(`e-sdate-${id}`).value;
+  const vendor = document.getElementById(`e-svendor-${id}`).value.trim();
+  const qty = Number(document.getElementById(`e-sqty-${id}`).value||0);
+  const note = document.getElementById(`e-snote-${id}`).value.trim();
+
+  db.ref(`${FB_ROOT}/admin/supply/${id}`).update({date, vendor, qty, note}, (error)=>{
+    showToast(!error ? '수정되었습니다' : '수정 실패');
+  });
 }
 
 async function deleteSupply(id){
   if(!(await customConfirm('이 내역을 삭제하시겠습니까?'))) return;
-  STATE.admin.supply = STATE.admin.supply.filter(x=>x.id!==id);
-  await saveAdmin();
-  renderAdminPage();
-  showToast('삭제되었습니다');
+  db.ref(`${FB_ROOT}/admin/supply/${id}`).remove((error)=>{
+    showToast(!error ? '삭제되었습니다' : '삭제 실패');
+  });
 }
 
 function renderOutbound(){
   const body = document.getElementById('outboundBody');
-  const list = STATE.admin.outbound.slice().sort((a,b)=>b.date.localeCompare(a.date));
+  const list = STATE.admin.outbound.slice().sort((a,b)=>(b.date||'').localeCompare(a.date||''));
   if(list.length===0){ body.innerHTML = `<tr class="empty-row"><td colspan="5">등록된 내역이 없습니다.</td></tr>`; return; }
   body.innerHTML = list.map(r=>`
     <tr data-id="${r.id}">
@@ -858,17 +865,21 @@ async function addOutbound(){
   const note = document.getElementById('outNote').value.trim();
   if(!qty){ showToast('수량을 입력해주세요'); return; }
 
-  STATE.admin.outbound.push({id:uid(), date, store, qty, note});
-  await saveAdmin();
-  document.getElementById('outQty').value='';
-  document.getElementById('outNote').value='';
-  renderAdminPage();
-  showToast('저장되었습니다');
+  db.ref(`${FB_ROOT}/admin/outbound`).push({date, store, qty, note}, (error)=>{
+    if(!error){
+      document.getElementById('outQty').value='';
+      document.getElementById('outNote').value='';
+      showToast('저장되었습니다');
+    } else {
+      showToast('저장 실패');
+    }
+  });
 }
 
 function editOutbound(id){
   const row = document.querySelector(`#outboundBody tr[data-id="${id}"]`);
   const r = STATE.admin.outbound.find(x=>x.id===id);
+  if(!r) return;
   row.innerHTML = `
     <td><input type="date" value="${r.date}" id="e-odate-${id}"></td>
     <td><select id="e-ostore-${id}">${STORES.map(s=>`<option value="${s}" ${s===r.store?'selected':''}>${s}</option>`).join('')}</select></td>
@@ -881,27 +892,26 @@ function editOutbound(id){
 }
 
 async function saveOutbound(id){
-  const r = STATE.admin.outbound.find(x=>x.id===id);
-  r.date = document.getElementById(`e-odate-${id}`).value;
-  r.store = document.getElementById(`e-ostore-${id}`).value;
-  r.qty = Number(document.getElementById(`e-oqty-${id}`).value||0);
-  r.note = document.getElementById(`e-onote-${id}`).value.trim();
-  await saveAdmin();
-  renderAdminPage();
-  showToast('수정되었습니다');
+  const date = document.getElementById(`e-odate-${id}`).value;
+  const store = document.getElementById(`e-ostore-${id}`).value;
+  const qty = Number(document.getElementById(`e-oqty-${id}`).value||0);
+  const note = document.getElementById(`e-onote-${id}`).value.trim();
+
+  db.ref(`${FB_ROOT}/admin/outbound/${id}`).update({date, store, qty, note}, (error)=>{
+    showToast(!error ? '수정되었습니다' : '수정 실패');
+  });
 }
 
 async function deleteOutbound(id){
   if(!(await customConfirm('이 내역을 삭제하시겠습니까?'))) return;
-  STATE.admin.outbound = STATE.admin.outbound.filter(x=>x.id!==id);
-  await saveAdmin();
-  renderAdminPage();
-  showToast('삭제되었습니다');
+  db.ref(`${FB_ROOT}/admin/outbound/${id}`).remove((error)=>{
+    showToast(!error ? '삭제되었습니다' : '삭제 실패');
+  });
 }
 
 function renderReturns(){
   const body = document.getElementById('returnsBody');
-  const list = STATE.admin.returns.slice().sort((a,b)=>b.date.localeCompare(a.date));
+  const list = STATE.admin.returns.slice().sort((a,b)=>(b.date||'').localeCompare(a.date||''));
   if(list.length===0){ body.innerHTML = `<tr class="empty-row"><td colspan="5">등록된 내역이 없습니다.</td></tr>`; return; }
   body.innerHTML = list.map(r=>`
     <tr data-id="${r.id}">
@@ -920,17 +930,21 @@ async function addReturn(){
   const note = document.getElementById('retNote').value.trim();
   if(!qty){ showToast('수량을 입력해주세요'); return; }
 
-  STATE.admin.returns.push({id:uid(), date, type, qty, note});
-  await saveAdmin();
-  document.getElementById('retQty').value='';
-  document.getElementById('retNote').value='';
-  renderAdminPage();
-  showToast('저장되었습니다');
+  db.ref(`${FB_ROOT}/admin/returns`).push({date, type, qty, note}, (error)=>{
+    if(!error){
+      document.getElementById('retQty').value='';
+      document.getElementById('retNote').value='';
+      showToast('저장되었습니다');
+    } else {
+      showToast('저장 실패');
+    }
+  });
 }
 
 function editReturn(id){
   const row = document.querySelector(`#returnsBody tr[data-id="${id}"]`);
   const r = STATE.admin.returns.find(x=>x.id===id);
+  if(!r) return;
   row.innerHTML = `
     <td><input type="date" value="${r.date}" id="e-rdate-${id}"></td>
     <td><select id="e-rtype-${id}">
@@ -946,22 +960,21 @@ function editReturn(id){
 }
 
 async function saveReturn(id){
-  const r = STATE.admin.returns.find(x=>x.id===id);
-  r.date = document.getElementById(`e-rdate-${id}`).value;
-  r.type = document.getElementById(`e-rtype-${id}`).value;
-  r.qty = Number(document.getElementById(`e-rqty-${id}`).value||0);
-  r.note = document.getElementById(`e-rnote-${id}`).value.trim();
-  await saveAdmin();
-  renderAdminPage();
-  showToast('수정되었습니다');
+  const date = document.getElementById(`e-rdate-${id}`).value;
+  const type = document.getElementById(`e-rtype-${id}`).value;
+  const qty = Number(document.getElementById(`e-rqty-${id}`).value||0);
+  const note = document.getElementById(`e-rnote-${id}`).value.trim();
+
+  db.ref(`${FB_ROOT}/admin/returns/${id}`).update({date, type, qty, note}, (error)=>{
+    showToast(!error ? '수정되었습니다' : '수정 실패');
+  });
 }
 
 async function deleteReturn(id){
   if(!(await customConfirm('이 내역을 삭제하시겠습니까?'))) return;
-  STATE.admin.returns = STATE.admin.returns.filter(x=>x.id!==id);
-  await saveAdmin();
-  renderAdminPage();
-  showToast('삭제되었습니다');
+  db.ref(`${FB_ROOT}/admin/returns/${id}`).remove((error)=>{
+    showToast(!error ? '삭제되었습니다' : '삭제 실패');
+  });
 }
 
 function runStatusReport(){
@@ -978,7 +991,8 @@ function runStatusReport(){
   const rows = REPORT_TYPES.map(type=>{
     let rowTotal = 0;
     const cells = STORES.map(s=>{
-      const sum = STATE.stores[s].records
+      const storeData = STATE.stores[s] || { records: [] };
+      const sum = storeData.records
         .filter(r=> r.date && r.date.slice(0,7)===month && r.type===type)
         .reduce((a,r)=>a+Number(r.qty||0),0);
       rowTotal += sum;
@@ -1006,10 +1020,16 @@ function runPosReport(){
     return;
   }
 
-  const counts = STORES.map(s=> STATE.stores[s].pos.filter(p=> p.date && p.date.slice(0,7)===month).length);
-  const amounts = STORES.map(s=> STATE.stores[s].pos
-    .filter(p=> p.date && p.date.slice(0,7)===month)
-    .reduce((a,p)=>a+Number(p.amount||0),0));
+  const counts = STORES.map(s=>{
+    const storeData = STATE.stores[s] || { pos: [] };
+    return storeData.pos.filter(p=> p.date && p.date.slice(0,7)===month).length;
+  });
+  const amounts = STORES.map(s=>{
+    const storeData = STATE.stores[s] || { pos: [] };
+    return storeData.pos
+      .filter(p=> p.date && p.date.slice(0,7)===month)
+      .reduce((a,p)=>a+Number(p.amount||0),0);
+  });
   const countTotal = counts.reduce((a,b)=>a+b,0);
   const amountTotal = amounts.reduce((a,b)=>a+b,0);
 
@@ -1023,7 +1043,8 @@ function downloadExcel(){
   const wb = XLSX.utils.book_new();
 
   STORES.forEach(s=>{
-    const rows = STATE.stores[s].records.map(r=>({
+    const storeData = STATE.stores[s] || { records: [] };
+    const rows = storeData.records.map(r=>({
       '날짜': r.date,
       '구분': r.type,
       '수량': r.qty,
@@ -1043,17 +1064,6 @@ function downloadExcel(){
 
   XLSX.writeFile(wb, `HAREHARE_상품권관리_${todayStr()}.xlsx`);
 }
-
-/* 탭으로 돌아왔을 때 최신 데이터로 자동 새로고침 (다른 기기에서 입력한 내용 반영) */
-window.addEventListener('focus', async ()=>{
-  if(document.getElementById('page-store').classList.contains('active') && STATE.currentStore){
-    STATE.stores[STATE.currentStore] = normalizeStoreData(await DB.get('store_'+STATE.currentStore, null));
-    renderStorePage(STATE.currentStore);
-  } else if(document.getElementById('page-admin').classList.contains('active')){
-    await loadAll();
-    renderAdminPage();
-  }
-});
 
 // 초기화
 window.addEventListener('DOMContentLoaded', ()=>{
