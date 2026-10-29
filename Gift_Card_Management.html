@@ -309,7 +309,7 @@
       <h3>📊 월말 상품권 현황 보고</h3>
       <div class="desc">선택한 월 기준으로 매장별 상품권 내역 및 기타 지급 현황을 집계합니다.</div>
       <div class="toolbar">
-        <input type="month" id="reportMonth" class="month-picker">
+        <input type="month" id="reportMonth" class="month-picker" onchange="runStatusReport()">
         <button class="btn btn-outline btn-sm" onclick="runStatusReport()">조회</button>
       </div>
       <div class="table-wrap">
@@ -324,7 +324,7 @@
       <h3>🧾 환불 후 POS 미반영 현황 보고</h3>
       <div class="desc">선택한 월 기준으로 매장별 환불 후 POS 미반영 건수와 금액을 집계합니다.</div>
       <div class="toolbar">
-        <input type="month" id="posReportMonth" class="month-picker">
+        <input type="month" id="posReportMonth" class="month-picker" onchange="runPosReport()">
         <button class="btn btn-outline btn-sm" onclick="runPosReport()">조회</button>
       </div>
       <div class="table-wrap">
@@ -358,7 +358,7 @@ function setSyncStatus(ok){
     : '<span class="led" style="background:var(--danger);"></span> 동기화 오류';
 }
 
-// 둔곡점이 포함된 6개 매장 목록
+// 총 6개 매장 목록
 const STORES = ["도안점","둔산점","갤러리아점","유성점","건양대점","둔곡점"];
 
 // 1. 상품권 입출 내역 선택지 (6개)
@@ -371,7 +371,7 @@ const RECORD_TYPES = [
   "회수용 상품권"
 ];
 
-// 3. 기타 지급 내역 선택지 (3개) - '기타' 최상단
+// 2. 기타 지급 내역 선택지 (3개 - '기타' 최상단)
 const OTHER_TYPES = [
   "기타",
   "이사님 지인 선물",
@@ -386,7 +386,7 @@ let STATE = {
 
 let adminUnlockedThisSession = false;
 let currentStoreListener = null;
-let currentAdminListener = null;
+let adminListeners = [];
 let currentStoreName = null;
 
 function todayStr(){ return new Date().toISOString().slice(0,10); }
@@ -431,7 +431,9 @@ function parseSnapshotData(snapshotVal){
   return Object.entries(snapshotVal).map(([id, val]) => ({ id, ...val }));
 }
 
+// 단일 매장 전용 구독 (매장 페이지용)
 function watchStore(storeName, callback){
+  removeAllAdminListeners();
   if(currentStoreListener && currentStoreName){
     db.ref(`${FB_ROOT}/store_${currentStoreName}`).off('value', currentStoreListener);
   }
@@ -452,12 +454,17 @@ function watchStore(storeName, callback){
   });
 }
 
-function watchAdmin(callback){
-  if(currentAdminListener){
-    db.ref(`${FB_ROOT}/admin`).off('value', currentAdminListener);
+// 관리팀 전용: 모든 매장 + 관리자 데이터 일괄 동기화
+function watchAllDataForAdmin(callback){
+  removeAllAdminListeners();
+  if(currentStoreListener && currentStoreName){
+    db.ref(`${FB_ROOT}/store_${currentStoreName}`).off('value', currentStoreListener);
+    currentStoreListener = null;
   }
-  const ref = db.ref(`${FB_ROOT}/admin`);
-  currentAdminListener = ref.on('value', (snapshot) => {
+
+  // 1. 관리팀 데이터 구독
+  const adminRef = db.ref(`${FB_ROOT}/admin`);
+  const adminL = adminRef.on('value', (snapshot) => {
     const data = snapshot.val() || {};
     STATE.admin = {
       supply: parseSnapshotData(data.supply),
@@ -466,10 +473,31 @@ function watchAdmin(callback){
     };
     setSyncStatus(true);
     if(callback) callback();
-  }, (error) => {
-    console.error(error);
-    setSyncStatus(false);
+  }, (err) => setSyncStatus(false));
+  adminListeners.push({ ref: adminRef, listener: adminL });
+
+  // 2. 전체 매장 데이터 구독
+  STORES.forEach(sName => {
+    const sRef = db.ref(`${FB_ROOT}/store_${sName}`);
+    const sL = sRef.on('value', (snapshot) => {
+      const data = snapshot.val() || {};
+      STATE.stores[sName] = {
+        records: parseSnapshotData(data.records),
+        pos: parseSnapshotData(data.pos),
+        other: parseSnapshotData(data.other)
+      };
+      setSyncStatus(true);
+      if(callback) callback();
+    }, (err) => setSyncStatus(false));
+    adminListeners.push({ ref: sRef, listener: sL });
   });
+}
+
+function removeAllAdminListeners(){
+  adminListeners.forEach(item => {
+    item.ref.off('value', item.listener);
+  });
+  adminListeners = [];
 }
 
 async function getAdminPassword(){
@@ -565,18 +593,16 @@ async function go(page, storeName){
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
 
   if(page === 'home'){
+    removeAllAdminListeners();
     if(currentStoreListener && currentStoreName) { db.ref(`${FB_ROOT}/store_${currentStoreName}`).off('value', currentStoreListener); currentStoreListener = null; }
-    if(currentAdminListener) { db.ref(`${FB_ROOT}/admin`).off('value', currentAdminListener); currentAdminListener = null; }
     document.getElementById('page-home').classList.add('active');
   } else if(page === 'store'){
-    if(currentAdminListener) { db.ref(`${FB_ROOT}/admin`).off('value', currentAdminListener); currentAdminListener = null; }
     STATE.currentStore = storeName;
     document.getElementById('page-store').classList.add('active');
     watchStore(storeName, ()=>renderStorePage(storeName));
   } else if(page === 'admin'){
-    if(currentStoreListener && currentStoreName) { db.ref(`${FB_ROOT}/store_${currentStoreName}`).off('value', currentStoreListener); currentStoreListener = null; }
     document.getElementById('page-admin').classList.add('active');
-    watchAdmin(()=>renderAdminPage());
+    watchAllDataForAdmin(()=>renderAdminPage());
   }
   window.scrollTo({top:0, behavior:'smooth'});
 }
@@ -864,10 +890,10 @@ async function deleteOtherRow(store, id){
 
 /* ==================== 관리팀 (ADMIN) 페이지 기능 ==================== */
 function adminTotals(){
-  const supplyTotal = STATE.admin.supply.reduce((a,r)=>a+Number(r.qty||0),0);
-  const outboundTotal = STATE.admin.outbound.reduce((a,r)=>a+Number(r.qty||0),0);
-  const reuseTotal = STATE.admin.returns.filter(r=>r.type==='재사용 보관').reduce((a,r)=>a+Number(r.qty||0),0);
-  const discardTotal = STATE.admin.returns.filter(r=>r.type==='폐기 처리').reduce((a,r)=>a+Number(r.qty||0),0);
+  const supplyTotal = (STATE.admin.supply||[]).reduce((a,r)=>a+Number(r.qty||0),0);
+  const outboundTotal = (STATE.admin.outbound||[]).reduce((a,r)=>a+Number(r.qty||0),0);
+  const reuseTotal = (STATE.admin.returns||[]).filter(r=>r.type==='재사용 보관').reduce((a,r)=>a+Number(r.qty||0),0);
+  const discardTotal = (STATE.admin.returns||[]).filter(r=>r.type==='폐기 처리').reduce((a,r)=>a+Number(r.qty||0),0);
   const inStock = supplyTotal - outboundTotal;
   return {supplyTotal, outboundTotal, inStock, reuseTotal, discardTotal};
 }
@@ -899,13 +925,14 @@ function renderAdminPage(){
   const posReportMonthEl = document.getElementById('posReportMonth');
   if(!reportMonthEl.value) reportMonthEl.value = curMonth;
   if(!posReportMonthEl.value) posReportMonthEl.value = curMonth;
+
   runStatusReport();
   runPosReport();
 }
 
 function renderSupply(){
   const body = document.getElementById('supplyBody');
-  const list = STATE.admin.supply.slice().sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  const list = (STATE.admin.supply||[]).slice().sort((a,b)=>(b.date||'').localeCompare(a.date||''));
   if(list.length===0){ body.innerHTML = `<tr class="empty-row"><td colspan="5">등록된 내역이 없습니다.</td></tr>`; return; }
   body.innerHTML = list.map(r=>`
     <tr data-id="${r.id}">
@@ -938,7 +965,7 @@ async function addSupply(){
 
 function editSupply(id){
   const row = document.querySelector(`#supplyBody tr[data-id="${id}"]`);
-  const r = STATE.admin.supply.find(x=>x.id===id);
+  const r = (STATE.admin.supply||[]).find(x=>x.id===id);
   if(!r) return;
   row.innerHTML = `
     <td><input type="date" value="${r.date}" id="e-sdate-${id}"></td>
@@ -971,7 +998,7 @@ async function deleteSupply(id){
 
 function renderOutbound(){
   const body = document.getElementById('outboundBody');
-  const list = STATE.admin.outbound.slice().sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  const list = (STATE.admin.outbound||[]).slice().sort((a,b)=>(b.date||'').localeCompare(a.date||''));
   if(list.length===0){ body.innerHTML = `<tr class="empty-row"><td colspan="5">등록된 내역이 없습니다.</td></tr>`; return; }
   body.innerHTML = list.map(r=>`
     <tr data-id="${r.id}">
@@ -1003,7 +1030,7 @@ async function addOutbound(){
 
 function editOutbound(id){
   const row = document.querySelector(`#outboundBody tr[data-id="${id}"]`);
-  const r = STATE.admin.outbound.find(x=>x.id===id);
+  const r = (STATE.admin.outbound||[]).find(x=>x.id===id);
   if(!r) return;
   row.innerHTML = `
     <td><input type="date" value="${r.date}" id="e-odate-${id}"></td>
@@ -1036,7 +1063,7 @@ async function deleteOutbound(id){
 
 function renderReturns(){
   const body = document.getElementById('returnsBody');
-  const list = STATE.admin.returns.slice().sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  const list = (STATE.admin.returns||[]).slice().sort((a,b)=>(b.date||'').localeCompare(a.date||''));
   if(list.length===0){ body.innerHTML = `<tr class="empty-row"><td colspan="5">등록된 내역이 없습니다.</td></tr>`; return; }
   body.innerHTML = list.map(r=>`
     <tr data-id="${r.id}">
@@ -1068,7 +1095,7 @@ async function addReturn(){
 
 function editReturn(id){
   const row = document.querySelector(`#returnsBody tr[data-id="${id}"]`);
-  const r = STATE.admin.returns.find(x=>x.id===id);
+  const r = (STATE.admin.returns||[]).find(x=>x.id===id);
   if(!r) return;
   row.innerHTML = `
     <td><input type="date" value="${r.date}" id="e-rdate-${id}"></td>
@@ -1215,9 +1242,9 @@ function downloadExcel(){
     XLSX.utils.book_append_sheet(wb, ws, s);
   });
 
-  const sup = STATE.admin.supply.map(r=>({'날짜':r.date, '업체명':r.vendor, '수량':r.qty, '비고':r.note||''}));
-  const out = STATE.admin.outbound.map(r=>({'날짜':r.date, '매장명':r.store, '수량':r.qty, '비고':r.note||''}));
-  const ret = STATE.admin.returns.map(r=>({'날짜':r.date, '구분':r.type, '수량':r.qty, '비고':r.note||''}));
+  const sup = (STATE.admin.supply||[]).map(r=>({'날짜':r.date, '업체명':r.vendor, '수량':r.qty, '비고':r.note||''}));
+  const out = (STATE.admin.outbound||[]).map(r=>({'날짜':r.date, '매장명':r.store, '수량':r.qty, '비고':r.note||''}));
+  const ret = (STATE.admin.returns||[]).map(r=>({'날짜':r.date, '구분':r.type, '수량':r.qty, '비고':r.note||''}));
 
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sup.length?sup:[{}]), '업체납품');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(out.length?out:[{}]), '매장출고');
