@@ -212,7 +212,7 @@
       </div>
     </div>
 
-    <!-- 3. 기타 지급 내역 (새로 추가된 항목) -->
+    <!-- 3. 기타 지급 내역 -->
     <div class="panel">
       <h3>🎁 기타 지급 내역</h3>
       <div class="desc">이사님 지인 선물, 컴플레인 처리 등 별도의 증빙이 어려운 기타 목적으로 지급된 상품권 내역을 기록합니다.</div>
@@ -358,7 +358,8 @@ function setSyncStatus(ok){
     : '<span class="led" style="background:var(--danger);"></span> 동기화 오류';
 }
 
-const STORES = ["도안점","둔산점","갤러리아점","유성점","건양대점"];
+// 둔곡점이 포함된 6개 매장 목록
+const STORES = ["도안점","둔산점","갤러리아점","유성점","건양대점","둔곡점"];
 
 // 1. 상품권 입출 내역 선택지 (6개)
 const RECORD_TYPES = [
@@ -370,7 +371,7 @@ const RECORD_TYPES = [
   "회수용 상품권"
 ];
 
-// 3. 기타 지급 내역 선택지 (3개) - '기타'를 최상단으로 변경
+// 3. 기타 지급 내역 선택지 (3개) - '기타' 최상단
 const OTHER_TYPES = [
   "기타",
   "이사님 지인 선물",
@@ -441,7 +442,7 @@ function watchStore(storeName, callback){
     STATE.stores[storeName] = {
       records: parseSnapshotData(data.records),
       pos: parseSnapshotData(data.pos),
-      other: parseSnapshotData(data.other) // 기타 지급 내역 추가
+      other: parseSnapshotData(data.other)
     };
     setSyncStatus(true);
     if(callback) callback();
@@ -601,13 +602,11 @@ function storeTotals(name){
   const storeData = STATE.stores[name] || { records: [], pos: [], other: [] };
   const totals = {};
   
-  // 입출 내역 집계
   RECORD_TYPES.forEach(t => totals[t] = 0);
   (storeData.records || []).forEach(r => {
     totals[r.type] = (totals[r.type] || 0) + Number(r.qty || 0);
   });
 
-  // 기타 지급 내역 집계
   OTHER_TYPES.forEach(t => totals[t] = 0);
   (storeData.other || []).forEach(r => {
     totals[r.type] = (totals[r.type] || 0) + Number(r.qty || 0);
@@ -623,7 +622,6 @@ function renderStorePage(name){
   const grid = document.getElementById('storeStatusGrid');
   grid.innerHTML = "";
 
-  // 입출 내역 + 기타 지급 내역 요약 표시
   const allCardTypes = [...RECORD_TYPES, ...OTHER_TYPES];
   allCardTypes.forEach(t => {
     const isWarn = (t === '회수용 상품권' || t === '컴플레인 지급');
@@ -634,7 +632,6 @@ function renderStorePage(name){
       </div>`;
   });
 
-  // 셀렉트 박스 옵션 설정
   document.getElementById('srType').innerHTML = RECORD_TYPES.map(t=>`<option value="${t}">${t}</option>`).join('');
   document.getElementById('otherType').innerHTML = OTHER_TYPES.map(t=>`<option value="${t}">${t}</option>`).join('');
 
@@ -791,7 +788,7 @@ async function deletePosRow(store, id){
   });
 }
 
-/* ==================== 3. 기타 지급 내역 (새로 추가) ==================== */
+/* ==================== 3. 기타 지급 내역 ==================== */
 function renderOtherList(name){
   const body = document.getElementById('storeOtherBody');
   const storeData = STATE.stores[name] || { other: [] };
@@ -1189,7 +1186,6 @@ function downloadExcel(){
   STORES.forEach(s=>{
     const storeData = STATE.stores[s] || { records: [], pos: [], other: [] };
     
-    // 입출 내역
     const recordsRows = (storeData.records || []).map(r=>({
       '분류': '입출 내역',
       '날짜': r.date,
@@ -1198,7 +1194,6 @@ function downloadExcel(){
       '비고': r.note || ''
     }));
 
-    // POS 미반영 리스트
     const posRows = (storeData.pos || []).map(p=>({
       '분류': 'POS 미반영',
       '날짜': p.date,
@@ -1207,7 +1202,6 @@ function downloadExcel(){
       '비고': p.note || ''
     }));
 
-    // 기타 지급 내역
     const otherRows = (storeData.other || []).map(o=>({
       '분류': '기타 지급 내역',
       '날짜': o.date,
